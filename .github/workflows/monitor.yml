@@ -14,7 +14,7 @@ jobs:
 
     steps:
       - name: Get repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Check server and notify Discord
         env:
@@ -30,7 +30,7 @@ jobs:
           PORT = "56528"
           webhook = os.environ.get("WEBHOOK", "")
 
-          # Query Bedrock API via mcsrvstat.us
+          # Query Aternos Bedrock server status via mcsrvstat.us API
           url = f"https://api.mcsrvstat.us/bedrock/2/{HOST}:{PORT}"
           online = False
 
@@ -48,7 +48,7 @@ jobs:
           new_state = "online" if online else "offline"
           print("Current state:", new_state)
 
-          # Read previous state
+          # Read previous state from local file
           state_file = "server_state.txt"
           if os.path.exists(state_file):
               with open(state_file, "r") as f:
@@ -85,7 +85,7 @@ jobs:
           with open(state_file, "w") as f:
               f.write(new_state)
 
-          # Push updated state file back to GitHub repository
+          # Save updated state file back to GitHub repository
           subprocess.run(["git", "config", "user.name", "Aternos Monitor"], check=True)
           subprocess.run(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], check=True)
           subprocess.run(["git", "add", state_file], check=True)
