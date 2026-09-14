@@ -1,0 +1,60 @@
+name: Aternos Discord Monitor
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check server and notify Discord
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          python - <<'PY'
+          import os
+          import json
+          import urllib.request
+
+          HOST = "DARK_ENERGY.aternos.me"
+          PORT = "56528"
+
+          webhook = os.environ["WEBHOOK"]
+
+          url = f"https://api.mcsrvstat.us/3/{HOST}:{PORT}"
+
+          try:
+              with urllib.request.urlopen(url, timeout=15) as r:
+                  data = json.load(r)
+
+              online = data.get("online", False)
+
+              state_file = "/tmp/state"
+              old = "offline"
+
+              if os.path.exists(state_file):
+                  old = open(state_file).read().strip()
+
+              new = "online" if online else "offline"
+
+              if new == "online" and old != "online":
+                  message = {
+                      "content": "🟢 **Minecraft Server Online!**\nYour Aternos server is now online! 🎮"
+                  }
+
+                  req = urllib.request.Request(
+                      webhook,
+                      data=json.dumps(message).encode(),
+                      headers={"Content-Type": "application/json"}
+                  )
+
+                  urllib.request.urlopen(req, timeout=15)
+
+              open(state_file, "w").write(new)
+
+          except Exception as e:
+              print("Check failed:", e)
+          PY
