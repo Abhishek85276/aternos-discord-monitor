@@ -5,18 +5,16 @@ on:
     - cron: "*/5 * * * *"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   check:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Restore persistent state
-        uses: actions/cache/restore@v4
-        with:
-          path: server_state.txt
-          key: server-state-${{ github.run_id }}
-          restore-keys: |
-            server-state-
+      - name: Get repository
+        uses: actions/checkout@v4
 
       - name: Check server and notify Discord
         env:
@@ -26,49 +24,50 @@ jobs:
           import os
           import json
           import urllib.request
-          import urllib.error
+          import subprocess
 
           HOST = "DARK_ENERGY.aternos.me"
           PORT = "56528"
           webhook = os.environ.get("WEBHOOK", "")
-          state_file = "server_state.txt"
 
-          if not webhook:
-              print("Warning: DISCORD_WEBHOOK secret is missing or empty.")
+          # Query Bedrock API via mcsrvstat.us
+          url = f"https://api.mcsrvstat.us/bedrock/2/{HOST}:{PORT}"
+          online = False
 
-          # Fetch Minecraft Bedrock status
-          url = f"https://api.mcstatus.io/v2/status/bedrock/{HOST}:{PORT}"
           try:
               req = urllib.request.Request(
                   url,
-                  headers={
-                      "User-Agent": "Aternos-Discord-Monitor/1.0",
-                      "Accept": "application/json"
-                  }
+                  headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
               )
               with urllib.request.urlopen(req, timeout=15) as response:
                   data = json.load(response)
-              
-              online = data.get("online", False)
-              new_state = "online" if online else "offline"
-              print(f"Current server status: {new_state}")
+                  online = data.get("online", False)
+          except Exception as e:
+              print(f"API check failed: {e}")
 
-              # Read previous state
+          new_state = "online" if online else "offline"
+          print("Current state:", new_state)
+
+          # Read previous state
+          state_file = "server_state.txt"
+          if os.path.exists(state_file):
+              with open(state_file, "r") as f:
+                  old_state = f.read().strip()
+          else:
               old_state = "offline"
-              if os.path.exists(state_file):
-                  with open(state_file, "r") as f:
-                      old_state = f.read().strip()
-              print(f"Previous state: {old_state}")
 
-              # Notify Discord on transition: offline -> online
-              if new_state == "online" and old_state != "online" and webhook:
-                  message = {
-                      "content": (
-                          "🟢 **Minecraft Server Online!**\n"
-                          "Your Aternos server is now online! 🎮\n"
-                          f"Server: `{HOST}:{PORT}`"
-                      )
-                  }
+          print("Previous state:", old_state)
+
+          # Send Discord notification when transitioning from offline -> online
+          if new_state == "online" and old_state != "online" and webhook:
+              message = {
+                  "content": (
+                      "🟢 **Minecraft Server Online!**\n"
+                      "Your Aternos server is now online! 🎮\n"
+                      f"Server: `{HOST}:{PORT}`"
+                  )
+              }
+              try:
                   discord_req = urllib.request.Request(
                       webhook,
                       data=json.dumps(message).encode("utf-8"),
@@ -77,25 +76,26 @@ jobs:
                           "User-Agent": "Aternos-Discord-Monitor/1.0"
                       }
                   )
-                  try:
-                      with urllib.request.urlopen(discord_req, timeout=15) as r:
-                          print("Discord notification sent! Status:", r.status)
-                  except urllib.error.URLError as err:
-                      print("Failed to send Discord webhook:", err)
+                  with urllib.request.urlopen(discord_req, timeout=15) as r:
+                      print("Discord notification sent! Response status:", r.status)
+              except Exception as err:
+                  print("Failed to send Discord message:", err)
 
-              # Save current state locally for caching step
-              with open(state_file, "w") as f:
-                  f.write(new_state)
+          # Save current state locally
+          with open(state_file, "w") as f:
+              f.write(new_state)
 
-          except Exception as e:
-              print("Check failed:", e)
-              raise
+          # Push updated state file back to GitHub repository
+          subprocess.run(["git", "config", "user.name", "Aternos Monitor"], check=True)
+          subprocess.run(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], check=True)
+          subprocess.run(["git", "add", state_file], check=True)
+          
+          result = subprocess.run(["git", "diff", "--cached", "--quiet"])
+          if result.returncode != 0:
+              subprocess.run(["git", "commit", "-m", "Update server status [skip ci]"], check=True)
+              subprocess.run(["git", "push"], check=True)
+              print("Server state updated in repo.")
+          else:
+              print("Server state unchanged.")
           PY
-
-      - name: Save persistent state
-        uses: actions/cache/save@v4
-        if: always()
-        with:
-          path: server_state.txt
-          key: server-state-${{ github.run_id }}
           
