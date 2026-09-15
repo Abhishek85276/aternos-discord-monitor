@@ -26,52 +26,59 @@ jobs:
           import urllib.request
           import time
           import subprocess
+          import random
 
           HOST = "DARK_ENERGY.aternos.me"
           PORT = "56528"
           webhook = os.environ.get("WEBHOOK", "").strip()
 
           def ping_server():
+              cb = random.randint(10000, 99999)
               apis = [
-                  f"https://api.mcstatus.io/v2/status/bedrock/{HOST}:{PORT}",
-                  f"https://api.mcsrvstat.us/bedrock/2/{HOST}:{PORT}"
+                  # Cache buster query string added to force fresh API pings
+                  f"https://api.mcstatus.io/v2/status/bedrock/{HOST}:{PORT}?nocache={cb}",
+                  f"https://api.mcsrvstat.us/bedrock/2/{HOST}:{PORT}",
+                  f"https://api.minetools.eu/ping/{HOST}/{PORT}"
               ]
               for url in apis:
                   try:
+                      # Unique user agent avoids Cloudflare bot cache blocks on GitHub runners
                       req = urllib.request.Request(
                           url,
-                          headers={"User-Agent": "Mozilla/5.0"}
+                          headers={"User-Agent": f"AternosMonitorClient/{cb}"}
                       )
                       with urllib.request.urlopen(req, timeout=8) as response:
                           data = json.load(response)
+                          # Handle mcstatus.io / mcsrvstat.us format
                           if data.get("online") is True:
+                              print(f"Server detected ONLINE via {url}")
                               return True
                   except Exception as e:
                       print(f"Ping failed for {url}: {e}")
               return False
 
-          # Step 1: Initial Ping
+          # Run 1st check
           online = ping_server()
 
-          # Step 2: Spam Guard - If reported offline, wait 10s and re-check before trusting it
+          # If 1st check says offline, double check after 5s to eliminate blips
           if not online:
-              print("First ping reported offline. Re-checking in 10 seconds to prevent false alerts...")
-              time.sleep(10)
+              print("Initial ping reported offline. Re-checking in 5 seconds...")
+              time.sleep(5)
               online = ping_server()
 
           new_state = "online" if online else "offline"
-          print("Evaluated server state:", new_state)
+          print("Final evaluated state:", new_state)
 
-          # Read previous state
+          # Read state file
           state_file = "server_state.txt"
           old_state = "offline"
           if os.path.exists(state_file):
               with open(state_file, "r") as f:
                   old_state = f.read().strip()
 
-          print("Previous server state:", old_state)
+          print("Previous state in repo:", old_state)
 
-          # Send Discord notification ONLY when state genuinely changes
+          # Trigger Discord Webhook on true transition
           if webhook and new_state != old_state:
               if new_state == "online":
                   message = {
@@ -94,21 +101,18 @@ jobs:
                   discord_req = urllib.request.Request(
                       webhook,
                       data=json.dumps(message).encode("utf-8"),
-                      headers={
-                          "Content-Type": "application/json",
-                          "User-Agent": "Aternos-Discord-Monitor/1.0"
-                      }
+                      headers={"Content-Type": "application/json", "User-Agent": "Aternos-Discord-Monitor/1.0"}
                   )
                   with urllib.request.urlopen(discord_req, timeout=10) as r:
-                      print("Discord notification sent! Status:", r.status)
+                      print("Discord alert sent successfully! HTTP Status:", r.status)
               except Exception as err:
-                  print("Failed to send Discord message:", err)
+                  print("Failed to deliver Discord notification:", err)
 
-          # Save current state
+          # Update state locally
           with open(state_file, "w") as f:
               f.write(new_state)
 
-          # Save updated state to GitHub
+          # Commit and push state back to repo
           subprocess.run(["git", "config", "user.name", "Aternos Monitor"], check=True)
           subprocess.run(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], check=True)
           subprocess.run(["git", "add", state_file], check=True)
@@ -118,8 +122,8 @@ jobs:
               subprocess.run(["git", "pull", "--rebase", "origin", "main"], check=False)
               subprocess.run(["git", "commit", "-m", "Update server status [skip ci]"], check=True)
               subprocess.run(["git", "push"], check=True)
-              print("Server state updated in repo.")
+              print("Updated server_state.txt in GitHub repository.")
           else:
-              print("Server state unchanged.")
+              print("Server state unchanged. No commit needed.")
           PY
           
