@@ -32,67 +32,71 @@ jobs:
           PORT = "56528"
           webhook = os.environ.get("WEBHOOK", "").strip()
 
-          def check_mcstatus(cb):
-              url = f"https://api.mcstatus.io/v2/status/bedrock/{HOST}:{PORT}?cb={cb}"
-              try:
-                  req = urllib.request.Request(url, headers={"User-Agent": f"AternosMonitor/{cb}"})
-                  with urllib.request.urlopen(req, timeout=6) as resp:
-                      data = json.load(resp)
-                      if data.get("online") is True:
-                          motd = data.get("motd", {})
-                          raw_motd = str(motd.get("clean", "")) + str(motd.get("raw", ""))
-                          if "offline" in raw_motd.lower() or "aternos" in raw_motd.lower():
-                              print("mcstatus.io: Standby proxy detected.")
-                              return False
-                          print("mcstatus.io: Genuine ONLINE state.")
-                          return True
-              except Exception as e:
-                  print(f"mcstatus.io failed: {e}")
-              return None
+          def is_valid_motd(motd_text):
+              """Returns False if MOTD contains Aternos standby/offline proxy phrases."""
+              motd_lower = motd_text.lower()
+              if "offline" in motd_lower or "aternos" in motd_lower:
+                  return False
+              return True
 
           def check_mcsrvstat(cb):
               url = f"https://api.mcsrvstat.us/bedrock/2/{HOST}:{PORT}?cb={cb}"
               try:
                   req = urllib.request.Request(url, headers={"User-Agent": f"AternosMonitor/{cb}"})
-                  with urllib.request.urlopen(req, timeout=6) as resp:
+                  with urllib.request.urlopen(req, timeout=8) as resp:
                       data = json.load(resp)
                       if data.get("online") is True:
                           motd_list = data.get("motd", {}).get("clean", [])
-                          motd_text = " ".join(motd_list).lower() if isinstance(motd_list, list) else str(motd_list).lower()
-                          if "offline" in motd_text or "aternos" in motd_text:
-                              print("mcsrvstat.us: Standby proxy detected.")
-                              return False
-                          print("mcsrvstat.us: Genuine ONLINE state.")
-                          return True
+                          motd_text = " ".join(motd_list) if isinstance(motd_list, list) else str(motd_list)
+                          if is_valid_motd(motd_text):
+                              print(f"mcsrvstat.us: Genuine ONLINE MOTD detected -> '{motd_text}'")
+                              return True
+                          else:
+                              print(f"mcsrvstat.us: Offline proxy MOTD -> '{motd_text}'")
               except Exception as e:
-                  print(f"mcsrvstat.us failed: {e}")
-              return None
-
-          def ping_server():
-              cb = random.randint(10000, 99999)
-              # Priority 1: mcstatus.io
-              res = check_mcstatus(cb)
-              if res is not None:
-                  return res
-              
-              # Priority 2: Fallback to mcsrvstat.us if mcstatus.io errors out
-              res = check_mcsrvstat(cb)
-              if res is not None:
-                  return res
-
+                  print(f"mcsrvstat.us check failed: {e}")
               return False
 
-          # Step 1: Initial check
-          online = ping_server()
+          def check_mcstatus(cb):
+              url = f"https://api.mcstatus.io/v2/status/bedrock/{HOST}:{PORT}?cb={cb}"
+              try:
+                  req = urllib.request.Request(url, headers={"User-Agent": f"AternosMonitor/{cb}"})
+                  with urllib.request.urlopen(req, timeout=8) as resp:
+                      data = json.load(resp)
+                      if data.get("online") is True:
+                          motd = data.get("motd", {})
+                          motd_text = str(motd.get("clean", "")) or str(motd.get("raw", ""))
+                          if is_valid_motd(motd_text):
+                              print(f"mcstatus.io: Genuine ONLINE MOTD detected -> '{motd_text}'")
+                              return True
+                          else:
+                              print(f"mcstatus.io: Offline proxy MOTD -> '{motd_text}'")
+              except Exception as e:
+                  print(f"mcstatus.io check failed: {e}")
+              return False
+
+          def evaluate_server():
+              cb = random.randint(10000, 99999)
+              
+              # Check both APIs: if EITHER returns online with valid MOTD, server is ONLINE
+              mcsrvstat_online = check_mcsrvstat(cb)
+              mcstatus_online = check_mcstatus(cb)
+
+              if mcsrvstat_online or mcstatus_online:
+                  return True
+              return False
+
+          # Step 1: Initial evaluation
+          online = evaluate_server()
 
           # Step 2: Retry buffer if initial check reports offline
           if not online:
-              print("First check reported offline. Retrying in 5s...")
+              print("Neither API reported online. Retrying in 5 seconds to confirm real shutdown...")
               time.sleep(5)
-              online = ping_server()
+              online = evaluate_server()
 
           new_state = "online" if online else "offline"
-          print("Evaluated State:", new_state)
+          print("Final Evaluated State:", new_state)
 
           # Read state file
           state_file = "server_state.txt"
@@ -103,7 +107,7 @@ jobs:
 
           print("Previous State:", old_state)
 
-          # Discord alert trigger
+          # Send Discord alert on state change
           if webhook and new_state != old_state:
               if new_state == "online":
                   message = {
@@ -137,7 +141,7 @@ jobs:
           with open(state_file, "w") as f:
               f.write(new_state)
 
-          # Commit changes
+          # Sync state file to repo
           subprocess.run(["git", "config", "user.name", "Aternos Monitor"], check=True)
           subprocess.run(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], check=True)
           subprocess.run(["git", "add", state_file], check=True)
