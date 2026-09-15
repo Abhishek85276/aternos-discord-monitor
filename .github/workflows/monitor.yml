@@ -35,39 +35,52 @@ jobs:
           def ping_server():
               cb = random.randint(10000, 99999)
               apis = [
-                  # Cache buster query string added to force fresh API pings
                   f"https://api.mcstatus.io/v2/status/bedrock/{HOST}:{PORT}?nocache={cb}",
-                  f"https://api.mcsrvstat.us/bedrock/2/{HOST}:{PORT}",
-                  f"https://api.minetools.eu/ping/{HOST}/{PORT}"
+                  f"https://api.mcsrvstat.us/bedrock/2/{HOST}:{PORT}"
               ]
               for url in apis:
                   try:
-                      # Unique user agent avoids Cloudflare bot cache blocks on GitHub runners
                       req = urllib.request.Request(
                           url,
                           headers={"User-Agent": f"AternosMonitorClient/{cb}"}
                       )
                       with urllib.request.urlopen(req, timeout=8) as response:
                           data = json.load(response)
-                          # Handle mcstatus.io / mcsrvstat.us format
-                          if data.get("online") is True:
-                              print(f"Server detected ONLINE via {url}")
+                          
+                          # Extract MOTD text across different API formats
+                          motd_text = ""
+                          if "motd" in data:
+                              if isinstance(data["motd"], dict):
+                                  motd_text = data["motd"].get("clean", "") or data["motd"].get("raw", "")
+                              elif isinstance(data["motd"], list):
+                                  motd_text = " ".join(data["motd"])
+                              else:
+                                  motd_text = str(data["motd"])
+
+                          is_online = data.get("online") is True
+                          
+                          # Ignore false-positives where Aternos proxy returns "Offline Aternos"
+                          if is_online and "offline" in motd_text.lower():
+                              print(f"Server returned proxy standby state ('{motd_text}'). Marking OFFLINE.")
+                              is_online = False
+
+                          if is_online:
+                              print(f"Detected genuine ONLINE status via {url}")
                               return True
                   except Exception as e:
                       print(f"Ping failed for {url}: {e}")
               return False
 
-          # Run 1st check
+          # Run check
           online = ping_server()
 
-          # If 1st check says offline, double check after 5s to eliminate blips
           if not online:
-              print("Initial ping reported offline. Re-checking in 5 seconds...")
+              print("First check indicated offline. Retrying in 5 seconds...")
               time.sleep(5)
               online = ping_server()
 
           new_state = "online" if online else "offline"
-          print("Final evaluated state:", new_state)
+          print("Evaluated State:", new_state)
 
           # Read state file
           state_file = "server_state.txt"
@@ -76,9 +89,9 @@ jobs:
               with open(state_file, "r") as f:
                   old_state = f.read().strip()
 
-          print("Previous state in repo:", old_state)
+          print("Previous State:", old_state)
 
-          # Trigger Discord Webhook on true transition
+          # Send Discord alert on state change
           if webhook and new_state != old_state:
               if new_state == "online":
                   message = {
@@ -104,15 +117,15 @@ jobs:
                       headers={"Content-Type": "application/json", "User-Agent": "Aternos-Discord-Monitor/1.0"}
                   )
                   with urllib.request.urlopen(discord_req, timeout=10) as r:
-                      print("Discord alert sent successfully! HTTP Status:", r.status)
+                      print("Discord alert delivered successfully! HTTP Status:", r.status)
               except Exception as err:
-                  print("Failed to deliver Discord notification:", err)
+                  print("Failed to send Discord notification:", err)
 
-          # Update state locally
+          # Write new state
           with open(state_file, "w") as f:
               f.write(new_state)
 
-          # Commit and push state back to repo
+          # Commit changes
           subprocess.run(["git", "config", "user.name", "Aternos Monitor"], check=True)
           subprocess.run(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], check=True)
           subprocess.run(["git", "add", state_file], check=True)
@@ -122,8 +135,8 @@ jobs:
               subprocess.run(["git", "pull", "--rebase", "origin", "main"], check=False)
               subprocess.run(["git", "commit", "-m", "Update server status [skip ci]"], check=True)
               subprocess.run(["git", "push"], check=True)
-              print("Updated server_state.txt in GitHub repository.")
+              print("State synced to repository.")
           else:
-              print("Server state unchanged. No commit needed.")
+              print("State unchanged.")
           PY
           
