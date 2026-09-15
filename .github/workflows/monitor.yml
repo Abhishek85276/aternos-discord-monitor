@@ -34,48 +34,44 @@ jobs:
 
           def ping_server():
               cb = random.randint(10000, 99999)
-              apis = [
-                  f"https://api.mcstatus.io/v2/status/bedrock/{HOST}:{PORT}?nocache={cb}",
-                  f"https://api.mcsrvstat.us/bedrock/2/{HOST}:{PORT}"
-              ]
-              for url in apis:
-                  try:
-                      req = urllib.request.Request(
-                          url,
-                          headers={"User-Agent": f"AternosMonitorClient/{cb}"}
-                      )
-                      with urllib.request.urlopen(req, timeout=8) as response:
-                          data = json.load(response)
-                          
-                          # Extract MOTD text across different API formats
-                          motd_text = ""
-                          if "motd" in data:
-                              if isinstance(data["motd"], dict):
-                                  motd_text = data["motd"].get("clean", "") or data["motd"].get("raw", "")
-                              elif isinstance(data["motd"], list):
-                                  motd_text = " ".join(data["motd"])
-                              else:
-                                  motd_text = str(data["motd"])
+              # Standard mcsrvstat.us Bedrock endpoint with dynamic cache-busting parameter
+              url = f"https://api.mcsrvstat.us/bedrock/2/{HOST}:{PORT}?cb={cb}"
+              
+              try:
+                  req = urllib.request.Request(
+                      url,
+                      headers={"User-Agent": f"AternosMonitorClient/{cb}"}
+                  )
+                  with urllib.request.urlopen(req, timeout=10) as response:
+                      data = json.load(response)
+                      
+                      is_online = data.get("online") is True
+                      
+                      # Extract MOTD clean text from mcsrvstat.us response schema
+                      motd_list = data.get("motd", {}).get("clean", [])
+                      motd_text = " ".join(motd_list).lower() if isinstance(motd_list, list) else str(motd_list).lower()
 
-                          is_online = data.get("online") is True
-                          
-                          # Ignore false-positives where Aternos proxy returns "Offline Aternos"
-                          if is_online and "offline" in motd_text.lower():
-                              print(f"Server returned proxy standby state ('{motd_text}'). Marking OFFLINE.")
-                              is_online = False
+                      # Catch Aternos standby proxy responses ("Offline Aternos")
+                      if is_online and ("offline" in motd_text or "aternos" in motd_text):
+                          print(f"mcsrvstat.us returned Aternos standby proxy ('{motd_text}'). Marking OFFLINE.")
+                          is_online = False
 
-                          if is_online:
-                              print(f"Detected genuine ONLINE status via {url}")
-                              return True
-                  except Exception as e:
-                      print(f"Ping failed for {url}: {e}")
+                      if is_online:
+                          print(f"Detected genuine ONLINE status via mcsrvstat.us")
+                          return True
+                      else:
+                          print(f"mcsrvstat.us reported server OFFLINE")
+              except Exception as e:
+                  print(f"Ping failed for mcsrvstat.us: {e}")
+              
               return False
 
-          # Run check
+          # Step 1: Check status
           online = ping_server()
 
+          # Step 2: Retry check if reported offline to prevent blips
           if not online:
-              print("First check indicated offline. Retrying in 5 seconds...")
+              print("First check reported offline. Retrying in 5 seconds...")
               time.sleep(5)
               online = ping_server()
 
@@ -91,7 +87,7 @@ jobs:
 
           print("Previous State:", old_state)
 
-          # Send Discord alert on state change
+          # Trigger Discord alert on state change
           if webhook and new_state != old_state:
               if new_state == "online":
                   message = {
@@ -117,15 +113,15 @@ jobs:
                       headers={"Content-Type": "application/json", "User-Agent": "Aternos-Discord-Monitor/1.0"}
                   )
                   with urllib.request.urlopen(discord_req, timeout=10) as r:
-                      print("Discord alert delivered successfully! HTTP Status:", r.status)
+                      print("Discord alert delivered successfully! Status:", r.status)
               except Exception as err:
-                  print("Failed to send Discord notification:", err)
+                  print("Failed to deliver Discord notification:", err)
 
-          # Write new state
+          # Update local state file
           with open(state_file, "w") as f:
               f.write(new_state)
 
-          # Commit changes
+          # Sync state file to repo
           subprocess.run(["git", "config", "user.name", "Aternos Monitor"], check=True)
           subprocess.run(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], check=True)
           subprocess.run(["git", "add", state_file], check=True)
@@ -135,8 +131,8 @@ jobs:
               subprocess.run(["git", "pull", "--rebase", "origin", "main"], check=False)
               subprocess.run(["git", "commit", "-m", "Update server status [skip ci]"], check=True)
               subprocess.run(["git", "push"], check=True)
-              print("State synced to repository.")
+              print("Updated server_state.txt in GitHub repository.")
           else:
-              print("State unchanged.")
+              print("Server state unchanged. No commit needed.")
           PY
           
