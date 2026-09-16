@@ -32,58 +32,47 @@ jobs:
           PORT = "56528"
           webhook = os.environ.get("WEBHOOK", "").strip()
 
-          def is_valid_motd(motd_text):
-              """Returns False if MOTD contains Aternos standby/offline proxy phrases."""
-              motd_lower = motd_text.lower()
-              if "offline" in motd_lower or "aternos" in motd_lower:
-                  return False
-              return True
+          def parse_motd_text(data):
+              """Extracts clean MOTD string across all API JSON schema structures."""
+              motd = data.get("motd", "")
+              if isinstance(motd, dict):
+                  clean = motd.get("clean", "")
+                  if isinstance(clean, list):
+                      return " ".join(clean)
+                  return str(clean)
+              elif isinstance(motd, list):
+                  return " ".join(motd)
+              return str(motd)
 
-          def check_mcsrvstat(cb):
-              url = f"https://api.mcsrvstat.us/bedrock/2/{HOST}:{PORT}?cb={cb}"
+          def is_genuine_online(url):
               try:
-                  req = urllib.request.Request(url, headers={"User-Agent": f"AternosMonitor/{cb}"})
+                  req = urllib.request.Request(url, headers={"User-Agent": f"AternosMonitorClient/{random.randint(1000, 9999)}"})
                   with urllib.request.urlopen(req, timeout=8) as resp:
                       data = json.load(resp)
                       if data.get("online") is True:
-                          motd_list = data.get("motd", {}).get("clean", [])
-                          motd_text = " ".join(motd_list) if isinstance(motd_list, list) else str(motd_list)
-                          if is_valid_motd(motd_text):
-                              print(f"mcsrvstat.us: Genuine ONLINE MOTD detected -> '{motd_text}'")
-                              return True
-                          else:
-                              print(f"mcsrvstat.us: Offline proxy MOTD -> '{motd_text}'")
+                          motd_text = parse_motd_text(data).lower()
+                          print(f"API ({url}) returned MOTD: '{motd_text}'")
+                          
+                          # Catch Aternos standby proxy messages
+                          if "offline" in motd_text or "aternos" in motd_text:
+                              print(f"API ({url}) hit Aternos standby proxy.")
+                              return False
+                          return True
               except Exception as e:
-                  print(f"mcsrvstat.us check failed: {e}")
-              return False
-
-          def check_mcstatus(cb):
-              url = f"https://api.mcstatus.io/v2/status/bedrock/{HOST}:{PORT}?cb={cb}"
-              try:
-                  req = urllib.request.Request(url, headers={"User-Agent": f"AternosMonitor/{cb}"})
-                  with urllib.request.urlopen(req, timeout=8) as resp:
-                      data = json.load(resp)
-                      if data.get("online") is True:
-                          motd = data.get("motd", {})
-                          motd_text = str(motd.get("clean", "")) or str(motd.get("raw", ""))
-                          if is_valid_motd(motd_text):
-                              print(f"mcstatus.io: Genuine ONLINE MOTD detected -> '{motd_text}'")
-                              return True
-                          else:
-                              print(f"mcstatus.io: Offline proxy MOTD -> '{motd_text}'")
-              except Exception as e:
-                  print(f"mcstatus.io check failed: {e}")
+                  print(f"Fetch failed for {url}: {e}")
               return False
 
           def evaluate_server():
               cb = random.randint(10000, 99999)
+              apis = [
+                  f"https://api.mcstatus.io/v2/status/bedrock/{HOST}:{PORT}?cb={cb}",
+                  f"https://api.mcsrvstat.us/bedrock/2/{HOST}:{PORT}?cb={cb}"
+              ]
               
-              # Check both APIs: if EITHER returns online with valid MOTD, server is ONLINE
-              mcsrvstat_online = check_mcsrvstat(cb)
-              mcstatus_online = check_mcstatus(cb)
-
-              if mcsrvstat_online or mcstatus_online:
-                  return True
+              # Server is strictly ONLINE only if an API confirms online AND has no standby MOTD
+              for url in apis:
+                  if is_genuine_online(url):
+                      return True
               return False
 
           # Step 1: Initial evaluation
@@ -91,7 +80,7 @@ jobs:
 
           # Step 2: Retry buffer if initial check reports offline
           if not online:
-              print("Neither API reported online. Retrying in 5 seconds to confirm real shutdown...")
+              print("Initial check reported offline. Retrying in 5 seconds to confirm...")
               time.sleep(5)
               online = evaluate_server()
 
