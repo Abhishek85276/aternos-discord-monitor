@@ -29,7 +29,7 @@ jobs:
           import random
 
           HOST = "DARK_ENERGY.aternos.me"
-          PORT = "56528"
+          PORT = "11406"
           webhook = os.environ.get("WEBHOOK", "").strip()
 
           def parse_motd_text(data):
