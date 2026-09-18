@@ -58,20 +58,18 @@ jobs:
                       
                       if data.get("online") is True:
                           motd_text = parse_motd_text(data).lower()
-                          hostname = str(data.get("hostname", "")).lower()
-                          print(f"API ({url}) MOTD: '{motd_text}' | Host: '{hostname}'")
+                          print(f"API ({url}) MOTD: '{motd_text}'")
                           
-                          # Ignore Aternos standby proxy MOTD
-                          if "offline" in motd_text or "aternos" in motd_text:
-                              return False
-                              
-                          # Prevent false alerts from recycled Aternos ports:
-                          # Verify that the server's clean MOTD or hostname matches your server
-                          if hostname and "dark_energy" not in hostname and "aternos" not in hostname:
-                              print(f"Port recycled by another server ({hostname}). Ignoring.")
+                          # Ignore standard Aternos standby/offline proxy messages
+                          if "offline" in motd_text:
                               return False
 
-                          return True
+                          # Strict verification using your specific MOTD username
+                          if "abhishek6661" in motd_text:
+                              return True
+                              
+                          print("Port active but MOTD belongs to another server on host. Ignoring.")
+                          return False
               except Exception as e:
                   print(f"Fetch failed for {url}: {e}")
               return False
@@ -98,7 +96,7 @@ jobs:
 
           print("Previous State:", old_state)
 
-          # Deliver Discord message only if genuine state change
+          # Deliver Discord message only on state flip
           if webhook and new_state != old_state:
               if new_state == "online":
                   message = {
@@ -134,7 +132,7 @@ jobs:
           with open(state_file, "w") as f:
               f.write(new_state)
 
-          # Sync state to GitHub repository
+          # Sync state to repository
           subprocess.run(["git", "config", "user.name", "Aternos Monitor"], check=True)
           subprocess.run(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], check=True)
           subprocess.run(["git", "add", state_file], check=True)
