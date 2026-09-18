@@ -56,17 +56,19 @@ jobs:
                   with urllib.request.urlopen(req, timeout=5) as resp:
                       data = json.load(resp)
                       
-                      # Check online status and player counts as fallback confirmation
-                      players_online = data.get("players", {}).get("online", 0) if isinstance(data.get("players"), dict) else 0
-                      is_online = data.get("online") is True
-                      
-                      if is_online:
+                      if data.get("online") is True:
                           motd_text = parse_motd_text(data).lower()
-                          print(f"API ({url}) MOTD: '{motd_text}' | Players: {players_online}")
+                          hostname = str(data.get("hostname", "")).lower()
+                          print(f"API ({url}) MOTD: '{motd_text}' | Host: '{hostname}'")
                           
                           # Ignore Aternos standby proxy MOTD
                           if "offline" in motd_text or "aternos" in motd_text:
                               return False
+                              
+                          # If hostname is provided and belongs to a different domain, ignore
+                          if hostname and "dark_energy" not in hostname and "aternos" not in hostname:
+                              return False
+
                           return True
               except Exception as e:
                   print(f"Fetch failed for {url}: {e}")
@@ -77,19 +79,17 @@ jobs:
               mcsrvstat_url = f"https://api.mcsrvstat.us/bedrock/2/{HOST}:{PORT}?cb={cb}"
               mcstatus_url = f"https://api.mcstatus.io/v2/status/bedrock/{HOST}:{PORT}?cb={cb}"
               
-              # Return True immediately if either API confirms online with valid MOTD
               if check_single_api(mcsrvstat_url) or check_single_api(mcstatus_url):
                   return True
               return False
 
-          # Step 1: Initial quick evaluation
-          online = evaluate_server()
-
-          # Step 2: Instant 3s re-check ONLY if first check says offline (prevents UDP ping loss false alerts)
-          if not online:
-              print("First check reported offline/timeout. Doing quick 3s verification check...")
+          # Require 2 matching checks 3 seconds apart to prevent transient port-reassignment alerts
+          online_first = evaluate_server()
+          if online_first:
               time.sleep(3)
               online = evaluate_server()
+          else:
+              online = False
 
           new_state = "online" if online else "offline"
           print("Evaluated Final State:", new_state)
@@ -103,7 +103,7 @@ jobs:
 
           print("Previous State:", old_state)
 
-          # Send Discord alert only when state actually flips
+          # Send Discord alert only on actual state flips
           if webhook and new_state != old_state:
               if new_state == "online":
                   message = {
@@ -139,7 +139,7 @@ jobs:
           with open(state_file, "w") as f:
               f.write(new_state)
 
-          # Commit to repo
+          # Sync to repository
           subprocess.run(["git", "config", "user.name", "Aternos Monitor"], check=True)
           subprocess.run(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], check=True)
           subprocess.run(["git", "add", state_file], check=True)
