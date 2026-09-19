@@ -60,27 +60,32 @@ jobs:
                           motd_text = parse_motd_text(data).lower()
                           print(f"API ({url}) MOTD: '{motd_text}'")
                           
-                          # Ignore standard Aternos standby/offline proxy messages
                           if "offline" in motd_text:
                               return False
 
-                          # Strict verification using your specific MOTD username
+                          # Target unique MOTD string
                           if "abhishek6661" in motd_text:
                               return True
                               
-                          print("Port active but MOTD belongs to another server on host. Ignoring.")
+                          print("Port active but MOTD belongs to another server. Ignoring.")
                           return False
               except Exception as e:
                   print(f"Fetch failed for {url}: {e}")
               return False
 
           def evaluate_server():
-              cb = random.randint(100000, 999999)
-              mcsrvstat_url = f"https://api.mcsrvstat.us/bedrock/2/{HOST}:{PORT}?cb={cb}"
-              mcstatus_url = f"https://api.mcstatus.io/v2/status/bedrock/{HOST}:{PORT}?cb={cb}"
-              
-              if check_single_api(mcsrvstat_url) or check_single_api(mcstatus_url):
-                  return True
+              # Retry loop: check 3 times with delays to prevent false offline alerts from API drops
+              for attempt in range(3):
+                  cb = random.randint(100000, 999999)
+                  mcsrvstat_url = f"https://api.mcsrvstat.us/bedrock/2/{HOST}:{PORT}?cb={cb}"
+                  mcstatus_url = f"https://api.mcstatus.io/v2/status/bedrock/{HOST}:{PORT}?cb={cb}"
+                  
+                  if check_single_api(mcsrvstat_url) or check_single_api(mcstatus_url):
+                      return True
+                      
+                  if attempt < 2:
+                      time.sleep(5)  # Wait 5 seconds before retrying
+                      
               return False
 
           online = evaluate_server()
