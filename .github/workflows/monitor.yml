@@ -80,72 +80,62 @@ jobs:
               return None
 
           def evaluate_server():
-              cb1 = random.randint(100000, 999999)
-              cb2 = random.randint(100000, 999999)
+              # Run 2 evaluation rounds spaced 10 seconds apart to prevent false offline alerts
+              for round_num in range(1, 3):
+                  print(f"--- Evaluation Round {round_num}/2 ---")
+                  cb1 = random.randint(100000, 999999)
+                  cb2 = random.randint(100000, 999999)
 
-              mcsrvstat_url = f"https://api.mcsrvstat.us/bedrock/2/{HOST}:{PORT}?cb={cb1}"
-              mcstatus_url = f"https://api.mcstatus.io/v2/status/bedrock/{HOST}:{PORT}?cb={cb2}"
+                  mcsrvstat_url = f"https://api.mcsrvstat.us/bedrock/2/{HOST}:{PORT}?cb={cb1}"
+                  mcstatus_url = f"https://api.mcstatus.io/v2/status/bedrock/{HOST}:{PORT}?cb={cb2}"
 
-              result1 = check_single_api(mcsrvstat_url)
-              result2 = check_single_api(mcstatus_url)
+                  res1 = check_single_api(mcsrvstat_url)
+                  res2 = check_single_api(mcstatus_url)
 
-              print(f"API RESULTS: mcsrvstat={result1}, mcstatus={result2}")
+                  print(f"Round {round_num} Results: mcsrvstat={res1}, mcstatus={res2}")
 
-              # Positive match on either API means server is explicitly ONLINE
-              if result1 is True or result2 is True:
-                  return "online"
+                  # If either API confirms online, immediately declare ONLINE
+                  if res1 is True or res2 is True:
+                      return "online"
 
-              # Both APIs explicitly respond with offline/wrong MOTD
-              if result1 is False and result2 is False:
+                  if round_num == 1:
+                      print("Server reported offline or uncertain in Round 1. Waiting 10s to recheck...")
+                      time.sleep(10)
+
+              # If both rounds confirmed explicit offline responses across all APIs
+              if res1 is False and res2 is False:
                   return "offline"
 
-              # Network timeout / API issue
               return "unknown"
 
           # ---------------------------------------------------------
-          # STATE TRACKING WITH FAULT TOLERANCE
+          # STATE TRACKING
           # ---------------------------------------------------------
           state_file = "server_state.txt"
-          fail_count_file = "fail_count.txt"
-
           old_state = "offline"
+
           if os.path.exists(state_file):
-              with open(state_file, "r") as f:
-                  saved_state = f.read().strip()
-                  if saved_state in ("online", "offline"):
-                      old_state = saved_state
-
-          fail_count = 0
-          if os.path.exists(fail_count_file):
               try:
-                  with open(fail_count_file, "r") as f:
-                      fail_count = int(f.read().strip())
-              except ValueError:
-                  fail_count = 0
+                  with open(state_file, "r") as f:
+                      saved = f.read().strip()
+                      if saved in ("online", "offline"):
+                          old_state = saved
+              except Exception:
+                  old_state = "offline"
 
-          print(f"Previous State: {old_state} | Fail Count: {fail_count}")
+          print("Previous State:", old_state)
 
-          current_eval = evaluate_server()
-          print("Raw Evaluation:", current_eval)
+          raw_result = evaluate_server()
+          print("Evaluated State:", raw_result)
 
-          new_state = old_state
-
-          if current_eval == "online":
-              fail_count = 0
-              new_state = "online"
-          elif current_eval == "offline":
-              fail_count += 1
-              print(f"Server evaluated as offline. Consecutive failure count: {fail_count}")
-              # Require 2 consecutive failed checks to confirm offline state
-              if old_state == "online" and fail_count >= 2:
-                  new_state = "offline"
-              elif old_state == "offline":
-                  new_state = "offline"
+          # Ignore unknown API hiccups and retain old state
+          if raw_result == "unknown":
+              new_state = old_state
+              print("API uncertainty detected. Retaining previous state:", new_state)
           else:
-              # 'unknown' API error: retain current state and don't increment failure counter
-              print("API error/uncertainty. Preserving previous state.")
+              new_state = raw_result
 
-          print(f"Confirmed Final State: {new_state}")
+          print("Confirmed Final State:", new_state)
 
           # ---------------------------------------------------------
           # DISCORD NOTIFICATION
@@ -182,31 +172,28 @@ jobs:
               print("State unchanged. No Discord alert sent.")
 
           # ---------------------------------------------------------
-          # UPDATE LOCAL STATE FILES
+          # UPDATE STATE FILE
           # ---------------------------------------------------------
           with open(state_file, "w") as f:
               f.write(new_state)
 
-          with open(fail_count_file, "w") as f:
-              f.write(str(fail_count))
-
           # ---------------------------------------------------------
-          # SYNC WITH REPOSITORY
+          # SYNC TO GITHUB
           # ---------------------------------------------------------
           subprocess.run(["git", "config", "user.name", "Aternos Monitor"], check=True)
           subprocess.run(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], check=True)
-          subprocess.run(["git", "add", state_file, fail_count_file], check=True)
+          subprocess.run(["git", "add", state_file], check=True)
 
           diff_result = subprocess.run(["git", "diff", "--cached", "--quiet"])
 
           if diff_result.returncode != 0:
-              print("State changed. Committing updates...")
+              print("State changed. Syncing repository...")
               subprocess.run(["git", "pull", "--rebase", "origin", "main"], check=False)
-              subprocess.run(["git", "commit", "-m", "Update server state [skip ci]"], check=True)
+              subprocess.run(["git", "commit", "-m", "Update server status [skip ci]"], check=True)
               subprocess.run(["git", "push"], check=True)
-              print("Updated repository state.")
+              print("Updated server_state.txt successfully.")
           else:
-              print("No state changes to commit.")
+              print("No state change to commit.")
 
           PY
           
