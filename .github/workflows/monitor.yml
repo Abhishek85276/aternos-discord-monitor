@@ -7,7 +7,7 @@ on:
 
 concurrency:
   group: aternos-monitor
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -15,10 +15,13 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 2
 
     steps:
       - name: Get repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Check server and notify Discord
         env:
@@ -34,76 +37,252 @@ jobs:
 
           HOST = "DARK_ENERGY.aternos.me"
           PORT = "11406"
+
           webhook = os.environ.get("WEBHOOK", "").strip()
+
+          # ---------------------------------------------------------
+          # MOTD PARSER
+          # ---------------------------------------------------------
 
           def parse_motd_text(data):
               motd = data.get("motd", "")
+
               if isinstance(motd, dict):
                   clean = motd.get("clean", "")
+
                   if isinstance(clean, list):
-                      return " ".join(clean)
+                      return " ".join(str(x) for x in clean)
+
                   return str(clean)
-              elif isinstance(motd, list):
-                  return " ".join(motd)
+
+              if isinstance(motd, list):
+                  return " ".join(str(x) for x in motd)
+
               return str(motd)
 
-          def check_single_api(url):
-              try:
-                  req = urllib.request.Request(
-                      url, 
-                      headers={"User-Agent": f"AternosMonitorClient/{random.randint(10000, 99999)}"}
-                  )
-                  with urllib.request.urlopen(req, timeout=5) as resp:
-                      data = json.load(resp)
-                      
-                      if data.get("online") is True:
-                          motd_text = parse_motd_text(data).lower()
-                          print(f"API ({url}) MOTD: '{motd_text}'")
-                          
-                          if "offline" in motd_text:
-                              return False
 
-                          # Target unique MOTD string
-                          if "abhishek6661" in motd_text:
-                              return True
-                              
-                          print("Port active but MOTD belongs to another server. Ignoring.")
+          # ---------------------------------------------------------
+          # SINGLE API CHECK
+          #
+          # Returns:
+          #   True  = confirmed online
+          #   False = confirmed offline / wrong server
+          #   None  = API request failed after retry
+          # ---------------------------------------------------------
+
+          def check_single_api(url):
+
+              for attempt in range(2):
+
+                  try:
+                      print(
+                          f"API attempt {attempt + 1}/2: {url}"
+                      )
+
+                      req = urllib.request.Request(
+                          url,
+                          headers={
+                              "User-Agent":
+                                  f"AternosMonitorClient/"
+                                  f"{random.randint(10000, 99999)}"
+                          }
+                      )
+
+                      with urllib.request.urlopen(
+                          req,
+                          timeout=5
+                      ) as resp:
+
+                          data = json.load(resp)
+
+                      # API returned a valid response.
+                      if data.get("online") is not True:
+                          print(
+                              "API explicitly reports server offline."
+                          )
                           return False
-              except Exception as e:
-                  print(f"Fetch failed for {url}: {e}")
-              return False
+
+                      motd_text = (
+                          parse_motd_text(data)
+                          .lower()
+                          .strip()
+                      )
+
+                      print(
+                          f"API MOTD: '{motd_text}'"
+                      )
+
+                      # Aternos/offline response.
+                      if "offline" in motd_text:
+                          print(
+                              "MOTD contains 'offline'."
+                          )
+                          return False
+
+                      # Our unique server MOTD.
+                      if "abhishek6661" in motd_text:
+                          print(
+                              "Unique MOTD matched. "
+                              "Server is ONLINE."
+                          )
+                          return True
+
+                      # API says online, but it is not our server.
+                      print(
+                          "Port active but MOTD does not match "
+                          "'abhishek6661'."
+                      )
+
+                      return False
+
+                  except Exception as e:
+                      print(
+                          f"API attempt {attempt + 1} failed: {e}"
+                      )
+
+                      if attempt == 0:
+                          print(
+                              "Waiting 3 seconds before retry..."
+                          )
+                          time.sleep(3)
+
+              print(
+                  "API failed after 2 attempts. "
+                  "Returning UNKNOWN."
+              )
+
+              return None
+
+
+          # ---------------------------------------------------------
+          # SERVER EVALUATION
+          #
+          # Both APIs are always checked.
+          #
+          # True + anything = ONLINE
+          # False + False = OFFLINE
+          # Anything involving None = UNKNOWN
+          # ---------------------------------------------------------
 
           def evaluate_server():
-              # Retry loop: check 3 times with delays to prevent false offline alerts from API drops
-              for attempt in range(3):
-                  cb = random.randint(100000, 999999)
-                  mcsrvstat_url = f"https://api.mcsrvstat.us/bedrock/2/{HOST}:{PORT}?cb={cb}"
-                  mcstatus_url = f"https://api.mcstatus.io/v2/status/bedrock/{HOST}:{PORT}?cb={cb}"
-                  
-                  if check_single_api(mcsrvstat_url) or check_single_api(mcstatus_url):
-                      return True
-                      
-                  if attempt < 2:
-                      time.sleep(5)  # Wait 5 seconds before retrying
-                      
-              return False
 
-          online = evaluate_server()
-          new_state = "online" if online else "offline"
-          print("Evaluated Final State:", new_state)
+              cb1 = random.randint(100000, 999999)
+              cb2 = random.randint(100000, 999999)
 
-          # Read previous state
+              mcsrvstat_url = (
+                  f"https://api.mcsrvstat.us/bedrock/2/"
+                  f"{HOST}:{PORT}?cb={cb1}"
+              )
+
+              mcstatus_url = (
+                  f"https://api.mcstatus.io/v2/status/bedrock/"
+                  f"{HOST}:{PORT}?cb={cb2}"
+              )
+
+              print("========================================")
+              print("Checking mcsrvstat.us...")
+              print("========================================")
+
+              result1 = check_single_api(
+                  mcsrvstat_url
+              )
+
+              print("========================================")
+              print("Checking mcstatus.io...")
+              print("========================================")
+
+              result2 = check_single_api(
+                  mcstatus_url
+              )
+
+              print("========================================")
+              print(
+                  f"API RESULTS: "
+                  f"mcsrvstat={result1}, "
+                  f"mcstatus={result2}"
+              )
+              print("========================================")
+
+              # Either API confirms OUR server is online.
+              if result1 is True or result2 is True:
+                  return "online"
+
+              # Both APIs explicitly confirm offline.
+              if result1 is False and result2 is False:
+                  return "offline"
+
+              # At least one API failed.
+              return "unknown"
+
+
+          # ---------------------------------------------------------
+          # READ PREVIOUS STATE
+          # ---------------------------------------------------------
+
           state_file = "server_state.txt"
+
           old_state = "offline"
+
           if os.path.exists(state_file):
+
               with open(state_file, "r") as f:
-                  old_state = f.read().strip()
+                  saved_state = f.read().strip()
+
+              if saved_state in ("online", "offline"):
+                  old_state = saved_state
 
           print("Previous State:", old_state)
 
-          # Deliver Discord message only on state flip
+
+          # ---------------------------------------------------------
+          # CHECK SERVER
+          # ---------------------------------------------------------
+
+          result = evaluate_server()
+
+          print("Raw Evaluation:", result)
+
+
+          # ---------------------------------------------------------
+          # UNKNOWN PROTECTION
+          #
+          # If APIs are temporarily unavailable, retain the previous
+          # state instead of sending a false Discord notification.
+          # ---------------------------------------------------------
+
+          if result == "unknown":
+
+              new_state = old_state
+
+              print(
+                  "API uncertainty detected."
+              )
+
+              print(
+                  "Keeping previous state:",
+                  new_state
+              )
+
+          else:
+
+              new_state = result
+
+              print(
+                  "Confirmed New State:",
+                  new_state
+              )
+
+
+          # ---------------------------------------------------------
+          # DISCORD NOTIFICATION
+          #
+          # Only notify when the confirmed state changes.
+          # ---------------------------------------------------------
+
           if webhook and new_state != old_state:
+
               if new_state == "online":
+
                   message = {
                       "content": (
                           "🟢 **Minecraft Server Online!**\n"
@@ -111,7 +290,9 @@ jobs:
                           f"Server: `{HOST}:{PORT}`"
                       )
                   }
+
               else:
+
                   message = {
                       "content": (
                           "🔴 **Minecraft Server Offline!**\n"
@@ -121,34 +302,150 @@ jobs:
                   }
 
               try:
+
                   discord_req = urllib.request.Request(
                       webhook,
-                      data=json.dumps(message).encode("utf-8"),
-                      headers={"Content-Type": "application/json", "User-Agent": "Aternos-Discord-Monitor/1.0"}
+                      data=json.dumps(message).encode(
+                          "utf-8"
+                      ),
+                      headers={
+                          "Content-Type":
+                              "application/json",
+                          "User-Agent":
+                              "Aternos-Discord-Monitor/1.0"
+                      }
                   )
-                  with urllib.request.urlopen(discord_req, timeout=8) as r:
-                      print("Discord alert delivered! Status:", r.status)
-              except Exception as err:
-                  print("Failed to deliver Discord notification:", err)
-          else:
-              print("State unchanged. No Discord alert sent.")
 
-          # Update state file
+                  with urllib.request.urlopen(
+                      discord_req,
+                      timeout=8
+                  ) as response:
+
+                      print(
+                          "Discord alert delivered! "
+                          "Status:",
+                          response.status
+                      )
+
+              except Exception as err:
+
+                  print(
+                      "Failed to deliver Discord notification:",
+                      err
+                  )
+
+          else:
+
+              print(
+                  "State unchanged. "
+                  "No Discord alert sent."
+              )
+
+
+          # ---------------------------------------------------------
+          # UPDATE STATE FILE
+          # ---------------------------------------------------------
+
           with open(state_file, "w") as f:
               f.write(new_state)
 
-          # Sync state to repository
-          subprocess.run(["git", "config", "user.name", "Aternos Monitor"], check=True)
-          subprocess.run(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], check=True)
-          subprocess.run(["git", "add", state_file], check=True)
-          
-          result = subprocess.run(["git", "diff", "--cached", "--quiet"])
-          if result.returncode != 0:
-              subprocess.run(["git", "pull", "--rebase", "origin", "main"], check=False)
-              subprocess.run(["git", "commit", "-m", "Update server status [skip ci]"], check=True)
-              subprocess.run(["git", "push"], check=True)
-              print("Updated server_state.txt.")
+
+          # ---------------------------------------------------------
+          # SYNC STATE TO GITHUB
+          # ---------------------------------------------------------
+
+          subprocess.run(
+              [
+                  "git",
+                  "config",
+                  "user.name",
+                  "Aternos Monitor"
+              ],
+              check=True
+          )
+
+          subprocess.run(
+              [
+                  "git",
+                  "config",
+                  "user.email",
+                  "41898282+github-actions[bot]"
+                  "@users.noreply.github.com"
+              ],
+              check=True
+          )
+
+          subprocess.run(
+              [
+                  "git",
+                  "add",
+                  state_file
+              ],
+              check=True
+          )
+
+          diff_result = subprocess.run(
+              [
+                  "git",
+                  "diff",
+                  "--cached",
+                  "--quiet"
+              ]
+          )
+
+
+          # ---------------------------------------------------------
+          # COMMIT ONLY WHEN STATE FILE CHANGED
+          # ---------------------------------------------------------
+
+          if diff_result.returncode != 0:
+
+              print(
+                  "State file changed. "
+                  "Syncing with repository..."
+              )
+
+              subprocess.run(
+                  [
+                      "git",
+                      "pull",
+                      "--rebase",
+                      "origin",
+                      "main"
+                  ],
+                  check=False
+              )
+
+              subprocess.run(
+                  [
+                      "git",
+                      "commit",
+                      "-m",
+                      "Update server status [skip ci]"
+                  ],
+                  check=True
+              )
+
+              subprocess.run(
+                  [
+                      "git",
+                      "push"
+                  ],
+                  check=True
+              )
+
+              print(
+                  "Updated server_state.txt."
+              )
+
           else:
-              print("No changes to commit.")
+
+              print(
+                  "No state changes to commit."
+              )
+
+          print("========================================")
+          print("MONITOR CHECK COMPLETE")
+          print("========================================")
+
           PY
-          
