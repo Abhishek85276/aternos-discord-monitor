@@ -70,46 +70,55 @@ jobs:
                           return False
 
                       motd_text = parse_motd_text(data).lower().strip()
-                      print(f"Parsed MOTD: '{motd_text}'")
 
                       if "offline" in motd_text:
                           return False
 
-                      # Match '6661' in MOTD
-                      if "6661" in motd_text:
-                          print("Matched MOTD keyword '6661'! Server is ONLINE.")
+                      # Checked for '6661' or 'abhi'
+                      if "6661" in motd_text or "abhi" in motd_text:
                           return True
 
-                      print("Port active, but MOTD keyword '6661' was not found.")
                       return False
 
                   except Exception as e:
-                      print(f"API attempt {attempt + 1} failed: {e}")
                       if attempt == 0:
                           time.sleep(2)
               return None
 
-          def evaluate_server():
+          def query_apis():
               cb1 = random.randint(100000, 999999)
               cb2 = random.randint(100000, 999999)
 
               mcsrvstat_url = f"https://api.mcsrvstat.us/bedrock/2/{HOST}:{PORT}?cb={cb1}"
               mcstatus_url = f"https://api.mcstatus.io/v2/status/bedrock/{HOST}:{PORT}?cb={cb2}"
 
-              print("Checking mcstatus.io...")
               res2 = check_single_api(mcstatus_url)
-
-              print("Checking mcsrvstat.us...")
               res1 = check_single_api(mcsrvstat_url)
-
-              print(f"API RESULTS: mcstatus={res2}, mcsrvstat={res1}")
 
               if res1 is True or res2 is True:
                   return "online"
-
               if res1 is False and res2 is False:
                   return "offline"
+              return "unknown"
 
+          def evaluate_server():
+              first_pass = query_apis()
+              print(f"Pass 1 result: {first_pass}")
+
+              if first_pass == "unknown":
+                  return "unknown"
+
+              # Confirmation buffer: Wait 10 seconds and re-query to confirm state stability
+              print("Waiting 10 seconds for confirmation pass...")
+              time.sleep(10)
+
+              second_pass = query_apis()
+              print(f"Pass 2 result: {second_pass}")
+
+              if first_pass == second_pass:
+                  return first_pass
+
+              print("State mismatch between passes. Ignoring temporary fluctuation.")
               return "unknown"
 
           # ---------------------------------------------------------
@@ -130,11 +139,11 @@ jobs:
           print("Previous State:", old_state)
 
           raw_result = evaluate_server()
-          print("Evaluated State:", raw_result)
+          print("Confirmed Evaluated State:", raw_result)
 
           if raw_result == "unknown":
               new_state = old_state
-              print("API uncertainty detected. Retaining previous state:", new_state)
+              print("Uncertain state or temporary glitch. Retaining previous state:", new_state)
           else:
               new_state = raw_result
 
