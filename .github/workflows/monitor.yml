@@ -23,6 +23,15 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install mcstatus
+
       - name: Check server and notify Discord
         env:
           WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
@@ -32,79 +41,50 @@ jobs:
           import json
           import urllib.request
           import subprocess
-          import time
-          import random
+          import socket
+          from mcstatus import BedrockServer
 
+          # Primary hostname
           HOST = "DARK_ENERGY.aternos.me"
-          PORT = "11406"
+          FALLBACK_PORT = 11406
 
           webhook = os.environ.get("WEBHOOK", "").strip()
 
-          def parse_motd_text(data):
-              motd = data.get("motd", "")
-              if isinstance(motd, dict):
-                  clean = motd.get("clean", "")
-                  if isinstance(clean, list):
-                      return " ".join(str(x) for x in clean)
-                  return str(clean)
-              if isinstance(motd, list):
-                  return " ".join(str(x) for x in motd)
-              return str(motd)
+          def ping_server():
+              # Method 1: Resolve server dynamically using Aternos Bedrock Direct Query
+              try:
+                  print(f"Pinging Bedrock server directly at {HOST}:{FALLBACK_PORT}...")
+                  server = BedrockServer.lookup(f"{HOST}:{FALLBACK_PORT}")
+                  status = server.status()
+                  
+                  motd_clean = status.motd.raw.lower() if hasattr(status.motd, 'raw') else str(status.motd).lower()
+                  print(f"Direct Ping Success! MOTD: '{motd_clean}'")
 
-          def check_single_api(url):
-              for attempt in range(2):
-                  try:
-                      req = urllib.request.Request(
-                          url,
-                          headers={"User-Agent": f"AternosMonitorClient/{random.randint(10000, 99999)}"}
-                      )
-                      with urllib.request.urlopen(req, timeout=6) as resp:
-                          data = json.load(resp)
+                  if "offline" in motd_clean:
+                      return "offline"
 
-                      if data.get("online") is not True:
-                          return False
-
-                      motd_text = parse_motd_text(data).lower().strip()
-
-                      if "offline" in motd_text:
-                          return False
-
-                      if "abhishek6661" in motd_text:
-                          return True
-
-                      return False
-
-                  except Exception as e:
-                      if attempt == 0:
-                          time.sleep(2)
-              return None
-
-          def evaluate_server():
-              # Run 2 evaluation rounds spaced 10 seconds apart to prevent false offline alerts
-              for round_num in range(1, 3):
-                  print(f"--- Evaluation Round {round_num}/2 ---")
-                  cb1 = random.randint(100000, 999999)
-                  cb2 = random.randint(100000, 999999)
-
-                  mcsrvstat_url = f"https://api.mcsrvstat.us/bedrock/2/{HOST}:{PORT}?cb={cb1}"
-                  mcstatus_url = f"https://api.mcstatus.io/v2/status/bedrock/{HOST}:{PORT}?cb={cb2}"
-
-                  res1 = check_single_api(mcsrvstat_url)
-                  res2 = check_single_api(mcstatus_url)
-
-                  print(f"Round {round_num} Results: mcsrvstat={res1}, mcstatus={res2}")
-
-                  # If either API confirms online, immediately declare ONLINE
-                  if res1 is True or res2 is True:
+                  # Check for unique identifier or active player slots
+                  if "abhishek6661" in motd_clean or status.players.max > 0:
                       return "online"
 
-                  if round_num == 1:
-                      print("Server reported offline or uncertain in Round 1. Waiting 10s to recheck...")
-                      time.sleep(10)
+              except Exception as e:
+                  print(f"Direct ping failed: {e}")
 
-              # If both rounds confirmed explicit offline responses across all APIs
-              if res1 is False and res2 is False:
-                  return "offline"
+              # Method 2: Public API Fallback if direct UDP fails
+              try:
+                  print("Attempting public API fallback...")
+                  url = f"https://api.mcstatus.io/v2/status/bedrock/{HOST}:{FALLBACK_PORT}"
+                  req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                  
+                  with urllib.request.urlopen(req, timeout=5) as resp:
+                      data = json.load(resp)
+                      
+                  if data.get("online") is True:
+                      return "online"
+                  elif data.get("online") is False:
+                      return "offline"
+              except Exception as e:
+                  print(f"API fallback failed: {e}")
 
               return "unknown"
 
@@ -125,13 +105,12 @@ jobs:
 
           print("Previous State:", old_state)
 
-          raw_result = evaluate_server()
+          raw_result = ping_server()
           print("Evaluated State:", raw_result)
 
-          # Ignore unknown API hiccups and retain old state
           if raw_result == "unknown":
               new_state = old_state
-              print("API uncertainty detected. Retaining previous state:", new_state)
+              print("Uncertain state. Retaining previous state:", new_state)
           else:
               new_state = raw_result
 
@@ -146,7 +125,7 @@ jobs:
                       "content": (
                           "🟢 **Minecraft Server Online!**\n"
                           "Your Aternos server is online! 🎮\n"
-                          f"Server: `{HOST}:{PORT}`"
+                          f"Server: `{HOST}:{FALLBACK_PORT}`"
                       )
                   }
               else:
@@ -154,7 +133,7 @@ jobs:
                       "content": (
                           "🔴 **Minecraft Server Offline!**\n"
                           "Your Aternos server has gone offline. 💤\n"
-                          f"Server: `{HOST}:{PORT}`"
+                          f"Server: `{HOST}:{FALLBACK_PORT}`"
                       )
                   }
 
@@ -162,7 +141,7 @@ jobs:
                   discord_req = urllib.request.Request(
                       webhook,
                       data=json.dumps(message).encode("utf-8"),
-                      headers={"Content-Type": "application/json", "User-Agent": "Aternos-Discord-Monitor/1.0"}
+                      headers={"Content-Type": "application/json"}
                   )
                   with urllib.request.urlopen(discord_req, timeout=8) as response:
                       print("Discord alert delivered! Status:", response.status)
@@ -187,7 +166,6 @@ jobs:
           diff_result = subprocess.run(["git", "diff", "--cached", "--quiet"])
 
           if diff_result.returncode != 0:
-              print("State changed. Syncing repository...")
               subprocess.run(["git", "pull", "--rebase", "origin", "main"], check=False)
               subprocess.run(["git", "commit", "-m", "Update server status [skip ci]"], check=True)
               subprocess.run(["git", "push"], check=True)
