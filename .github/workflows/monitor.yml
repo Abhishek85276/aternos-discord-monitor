@@ -75,12 +75,12 @@ jobs:
                       if "offline" in motd_text:
                           return False
 
-                      # Match 'abhi' in MOTD (covers Abhi, Abhishek, abhishek6661)
-                      if "abhi" in motd_text:
-                          print("Matched MOTD keyword 'abhi'! Server is ONLINE.")
+                      # Match '6661' in MOTD
+                      if "6661" in motd_text:
+                          print("Matched MOTD keyword '6661'! Server is ONLINE.")
                           return True
 
-                      print("Port active, but MOTD keyword 'abhi' was not found.")
+                      print("Port active, but MOTD keyword '6661' was not found.")
                       return False
 
                   except Exception as e:
